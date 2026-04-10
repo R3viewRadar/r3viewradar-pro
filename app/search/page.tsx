@@ -210,9 +210,9 @@ function SearchResults() {
                   </>
                 )}
               </p>
-              {source === "mock" && !loading && total > 0 && (
-                <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                  Demo data — connect Google Places API for real results
+              {source === "google_places" && !loading && total > 0 && (
+                <p className="text-[10px] text-emerald-400/60 mt-0.5">
+                  Live results from Google Places
                 </p>
               )}
             </div>

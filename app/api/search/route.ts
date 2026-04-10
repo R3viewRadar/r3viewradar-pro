@@ -3,17 +3,8 @@ import { geocodeLocation, haversineDistance, milesToMeters, formatDistance } fro
 import type { LatLng } from "@/lib/geo";
 
 /**
- * /api/search — Real-time business search using Google Places Text Search API.
- *
- * Query params:
- *   q        — search query (e.g., "personal injury lawyer")
- *   lat      — user latitude (from browser geolocation)
- *   lng      — user longitude
- *   location — city/zip fallback (geocoded to lat/lng if lat/lng not provided)
- *   radius   — search radius in miles (default 25)
- *   category — filter category (lawyer, insurance, finance, real-estate)
- *   sort     — ranking: relevance | rating | distance | review_count
- *   limit    — max results (default 20)
+ * /api/search — LIVE Google Places Text Search API.
+ * No mock data. No fallbacks. Real businesses only.
  */
 
 interface PlacesResult {
@@ -26,15 +17,15 @@ interface PlacesResult {
   internationalPhoneNumber?: string;
   websiteUri?: string;
   googleMapsUri?: string;
-  currentOpeningHours?: { openNow?: boolean; weekdayDescriptions?: string[] };
+  currentOpeningHours?: { openNow?: boolean };
   types?: string[];
   location?: { latitude: number; longitude: number };
   primaryTypeDisplayName?: { text: string };
-  photos?: Array<{ name: string }>;
 }
 
 interface SearchResultItem {
   id: string;
+  place_id: string;
   name: string;
   address: string;
   category: string;
@@ -49,12 +40,11 @@ interface SearchResultItem {
   is_open: boolean | null;
   lat: number;
   lng: number;
-  photo_url: string;
   types: string[];
 }
 
 const CATEGORY_QUERIES: Record<string, string> = {
-  lawyer: "lawyer attorney legal",
+  lawyer: "lawyer attorney",
   insurance: "insurance agent broker",
   finance: "financial advisor planner",
   "real-estate": "real estate agent realtor",
@@ -73,6 +63,14 @@ export async function GET(request: NextRequest) {
 
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
 
+  // HARD REQUIREMENT: API key must be set
+  if (!apiKey) {
+    return NextResponse.json(
+      { results: [], total: 0, error: "Google Places API key is not configured. Add GOOGLE_PLACES_API_KEY to Vercel environment variables.", source: "error" },
+      { status: 503 }
+    );
+  }
+
   // Resolve user location
   let userLocation: LatLng | null = null;
 
@@ -82,14 +80,15 @@ export async function GET(request: NextRequest) {
     userLocation = await geocodeLocation(locationStr, apiKey);
   }
 
-  // Build search query with category context
+  // Build search query
   let searchQuery = query;
   if (category && CATEGORY_QUERIES[category]) {
-    if (!query) {
-      searchQuery = CATEGORY_QUERIES[category];
-    } else {
-      searchQuery = `${query} ${CATEGORY_QUERIES[category]}`;
-    }
+    searchQuery = query ? `${query} ${CATEGORY_QUERIES[category]}` : CATEGORY_QUERIES[category];
+  }
+
+  // If user provided location text but no query + no category, search for businesses in that area
+  if (!searchQuery && locationStr) {
+    searchQuery = "businesses";
   }
 
   if (!searchQuery) {
@@ -99,46 +98,42 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // If Google Places API is available, use it
-  if (apiKey) {
-    try {
-      const results = await searchGooglePlaces(
-        searchQuery,
-        userLocation,
-        radiusMiles,
-        limit,
-        apiKey
-      );
-
-      // Sort results
-      const sorted = sortResults(results, sortBy, userLocation);
-
-      return NextResponse.json({
-        results: sorted,
-        total: sorted.length,
-        query: searchQuery,
-        user_location: userLocation,
-        radius_miles: radiusMiles,
-        source: "google_places",
-      });
-    } catch (err) {
-      console.error("Google Places search error:", err);
-      // Fall through to mock data
-    }
+  // If we have a location string but no coordinates, append it to the query for better results
+  if (!userLocation && locationStr) {
+    searchQuery = `${searchQuery} in ${locationStr}`;
   }
 
-  // Fallback: generate mock results based on query
-  const mockResults = generateMockSearchResults(searchQuery, category, userLocation, limit);
-  const sorted = sortResults(mockResults, sortBy, userLocation);
+  try {
+    const results = await searchGooglePlaces(
+      searchQuery,
+      userLocation,
+      radiusMiles,
+      limit,
+      apiKey
+    );
 
-  return NextResponse.json({
-    results: sorted,
-    total: sorted.length,
-    query: searchQuery,
-    user_location: userLocation,
-    radius_miles: radiusMiles,
-    source: "mock",
-  });
+    // Filter out results with no rating (usually irrelevant or unreviewed)
+    const filtered = results.filter((r) => r.rating > 0 && r.review_count > 0);
+
+    // Sort
+    const sorted = sortResults(filtered.length > 0 ? filtered : results, sortBy, userLocation);
+
+    return NextResponse.json({
+      results: sorted,
+      total: sorted.length,
+      query: searchQuery,
+      user_location: userLocation,
+      radius_miles: radiusMiles,
+      source: "google_places",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("Google Places search failed:", message);
+    return NextResponse.json(
+      { results: [], total: 0, error: `Search failed: ${message}`, source: "error" },
+      { status: 502 }
+    );
+  }
 }
 
 async function searchGooglePlaces(
@@ -152,10 +147,9 @@ async function searchGooglePlaces(
     textQuery: query,
     maxResultCount: Math.min(maxResults, 20),
     languageCode: "en",
-    rankPreference: "RELEVANCE",
   };
 
-  // Apply location bias if we have coordinates
+  // Apply location bias — this is critical for accurate local results
   if (userLocation) {
     requestBody.locationBias = {
       circle: {
@@ -166,6 +160,10 @@ async function searchGooglePlaces(
         radius: milesToMeters(radiusMiles),
       },
     };
+    // When we have location, rank by distance for better local results
+    requestBody.rankPreference = "DISTANCE";
+  } else {
+    requestBody.rankPreference = "RELEVANCE";
   }
 
   const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
@@ -180,9 +178,9 @@ async function searchGooglePlaces(
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    console.error(`Google Places error ${res.status}:`, errText);
-    throw new Error(`Google Places API error: ${res.status}`);
+    const errBody = await res.text();
+    console.error(`Google Places API ${res.status}:`, errBody);
+    throw new Error(`Google Places API returned ${res.status}`);
   }
 
   const data = (await res.json()) as { places?: PlacesResult[] };
@@ -196,7 +194,8 @@ async function searchGooglePlaces(
       : 0;
 
     return {
-      id: p.id ?? crypto.randomUUID(),
+      id: p.id ?? "",
+      place_id: p.id ?? "",
       name: p.displayName?.text ?? "Unknown",
       address: p.formattedAddress ?? "",
       category: p.primaryTypeDisplayName?.text ?? formatTypes(p.types),
@@ -215,7 +214,6 @@ async function searchGooglePlaces(
       is_open: p.currentOpeningHours?.openNow ?? null,
       lat: placeLat,
       lng: placeLng,
-      photo_url: "",
       types: p.types ?? [],
     };
   });
@@ -224,21 +222,12 @@ async function searchGooglePlaces(
 function formatTypes(types?: string[]): string {
   if (!types?.length) return "Business";
   const map: Record<string, string> = {
-    lawyer: "Lawyer",
-    attorney: "Attorney",
-    law_firm: "Law Firm",
-    insurance_agency: "Insurance Agency",
-    financial_planner: "Financial Planner",
-    accounting: "Accountant",
-    real_estate_agency: "Real Estate Agency",
-    real_estate_agent: "Real Estate Agent",
-    restaurant: "Restaurant",
-    doctor: "Doctor",
-    dentist: "Dentist",
-    hospital: "Hospital",
-    pharmacy: "Pharmacy",
-    store: "Store",
-    cafe: "Cafe",
+    lawyer: "Lawyer", attorney: "Attorney", law_firm: "Law Firm",
+    insurance_agency: "Insurance Agency", financial_planner: "Financial Planner",
+    accounting: "Accountant", real_estate_agency: "Real Estate Agency",
+    real_estate_agent: "Real Estate Agent", restaurant: "Restaurant",
+    doctor: "Doctor", dentist: "Dentist", hospital: "Hospital",
+    pharmacy: "Pharmacy", store: "Store", cafe: "Cafe",
   };
   for (const t of types) {
     if (map[t]) return map[t];
@@ -257,119 +246,23 @@ function sortResults(
       sorted.sort((a, b) => b.rating - a.rating || b.review_count - a.review_count);
       break;
     case "distance":
-      if (userLocation) {
-        sorted.sort((a, b) => a.distance_miles - b.distance_miles);
-      }
+      if (userLocation) sorted.sort((a, b) => a.distance_miles - b.distance_miles);
       break;
     case "review_count":
       sorted.sort((a, b) => b.review_count - a.review_count);
       break;
     case "relevance":
     default:
-      // Composite score: rating weight + review volume + distance penalty
       sorted.sort((a, b) => {
-        const scoreA = computeRelevanceScore(a, userLocation);
-        const scoreB = computeRelevanceScore(b, userLocation);
-        return scoreB - scoreA;
+        const sa = (a.rating / 5) * 50 + Math.min(30, Math.log10(Math.max(1, a.review_count)) * 10)
+          - (userLocation && a.distance_miles > 0 ? Math.min(20, a.distance_miles * 0.5) : 0)
+          + (a.is_open === true ? 5 : 0);
+        const sb = (b.rating / 5) * 50 + Math.min(30, Math.log10(Math.max(1, b.review_count)) * 10)
+          - (userLocation && b.distance_miles > 0 ? Math.min(20, b.distance_miles * 0.5) : 0)
+          + (b.is_open === true ? 5 : 0);
+        return sb - sa;
       });
       break;
   }
   return sorted;
-}
-
-function computeRelevanceScore(item: SearchResultItem, userLocation: LatLng | null): number {
-  let score = 0;
-
-  // Rating: 0-50 points
-  score += (item.rating / 5) * 50;
-
-  // Review volume: 0-30 points (log scale)
-  const reviewScore = Math.min(30, Math.log10(Math.max(1, item.review_count)) * 10);
-  score += reviewScore;
-
-  // Distance penalty: closer is better (0 to -20 points)
-  if (userLocation && item.distance_miles > 0) {
-    const distPenalty = Math.min(20, item.distance_miles * 0.5);
-    score -= distPenalty;
-  }
-
-  // Open bonus: +5 for currently open businesses
-  if (item.is_open === true) score += 5;
-
-  return score;
-}
-
-// ─── Mock Data Fallback ──────────────────────────────────────────────────
-
-function generateMockSearchResults(
-  query: string,
-  category: string,
-  userLocation: LatLng | null,
-  limit: number
-): SearchResultItem[] {
-  const baseLat = userLocation?.lat ?? 40.7128;
-  const baseLng = userLocation?.lng ?? -73.9712;
-
-  const names = [
-    "Smith & Associates", "Johnson Legal Group", "Park Financial",
-    "Chen Insurance Services", "Rodriguez Realty", "Thompson Law Firm",
-    "Williams Advisory", "Davis & Partners", "Martinez Insurance Group",
-    "Anderson Financial Planning", "Taylor Real Estate", "Lee Legal Services",
-    "Wilson Insurance Agency", "Brown Wealth Management", "Garcia & Associates",
-    "Miller Law Office", "Jones Financial Group", "Clark Insurance Advisors",
-    "Hall Realty Group", "Wright Legal Counsel",
-  ];
-
-  const categoryLabels: Record<string, string> = {
-    lawyer: "Law Firm",
-    insurance: "Insurance Agency",
-    finance: "Financial Advisor",
-    "real-estate": "Real Estate Agency",
-  };
-
-  const streets = [
-    "Main St", "Broadway", "Market St", "Oak Ave", "5th Ave", "Park Dr",
-    "Commerce Blvd", "Liberty Ave", "Court St", "Federal Blvd", "State St",
-    "Center Ave", "Court Square", "Wall St", "Madison Ave",
-  ];
-
-  const cityState = userLocation
-    ? "Local Area"
-    : "New York, NY";
-
-  return Array.from({ length: Math.min(limit, 20) }, (_, i) => {
-    // Scatter locations around user within radius
-    const latOffset = (Math.random() - 0.5) * 0.3;
-    const lngOffset = (Math.random() - 0.5) * 0.3;
-    const placeLat = baseLat + latOffset;
-    const placeLng = baseLng + lngOffset;
-    const dist = userLocation
-      ? haversineDistance(userLocation, { lat: placeLat, lng: placeLng })
-      : i * 1.2 + Math.random() * 2;
-
-    const rating = Math.round((3.5 + Math.random() * 1.5) * 10) / 10;
-    const reviewCount = Math.floor(20 + Math.random() * 500);
-    const streetNum = Math.floor(100 + Math.random() * 9000);
-    const isOpen = Math.random() > 0.2;
-
-    return {
-      id: `mock-${i}`,
-      name: names[i % names.length],
-      address: `${streetNum} ${streets[i % streets.length]}, ${cityState}`,
-      category: categoryLabels[category] ?? "Professional Services",
-      rating,
-      review_count: reviewCount,
-      phone: `(${200 + Math.floor(Math.random() * 800)}) ${200 + Math.floor(Math.random() * 800)}-${1000 + Math.floor(Math.random() * 9000)}`,
-      website: `https://www.${names[i % names.length].toLowerCase().replace(/[^a-z]+/g, "")}.com`,
-      maps_url: `https://www.google.com/maps/search/${encodeURIComponent(query + " " + cityState)}`,
-      hours_status: isOpen ? "Open now" : "Closed",
-      distance_miles: Math.round(dist * 10) / 10,
-      distance_label: formatDistance(dist),
-      is_open: isOpen,
-      lat: placeLat,
-      lng: placeLng,
-      photo_url: "",
-      types: [],
-    };
-  }).sort((a, b) => a.distance_miles - b.distance_miles);
 }
