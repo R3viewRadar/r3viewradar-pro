@@ -23,6 +23,8 @@ interface SearchResult {
   distance_miles: number;
   distance_label: string;
   is_open: boolean | null;
+  lat: number;
+  lng: number;
 }
 
 interface SearchResponse {
@@ -30,6 +32,27 @@ interface SearchResponse {
   total: number;
   query: string;
   source: string;
+}
+
+// ─── Utility functions ─────────────────────────────────────────────────────
+
+/** Ensure URL has a protocol — Google sometimes returns bare URLs */
+function ensureProtocol(url: string): string {
+  if (!url) return "";
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  return `https://${url}`;
+}
+
+/** Build a proper Google Maps directions URL from result data */
+function buildDirectionsUrl(result: SearchResult): string {
+  // If we have coordinates, use them for precise directions
+  if (result.lat && result.lng && result.lat !== 0 && result.lng !== 0) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${result.lat},${result.lng}`;
+  }
+  // Fall back to the Google Maps URI from the API
+  if (result.maps_url) return result.maps_url;
+  // Last resort: search by address
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(result.address || result.name)}`;
 }
 
 const SORT_OPTIONS = [
@@ -294,9 +317,9 @@ function SearchResults() {
           {!loading && results.length > 0 && (
             <div className="space-y-3">
               {results.map((result, idx) => (
-                <div
+                <article
                   key={result.id}
-                  className="group rounded-2xl border border-border bg-card p-5 transition-all hover:border-cyan-500/20 hover:shadow-lg hover:shadow-cyan-500/5"
+                  className="rounded-2xl border border-border bg-card p-5 hover:border-cyan-500/20 hover:shadow-lg hover:shadow-cyan-500/5 transition-[border-color,box-shadow] duration-200"
                 >
                   <div className="flex items-start gap-4">
                     {/* Rank */}
@@ -308,7 +331,7 @@ function SearchResults() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <h3 className="font-semibold text-foreground group-hover:text-cyan-400 transition-colors truncate">
+                          <h3 className="font-semibold text-foreground truncate">
                             {result.name}
                           </h3>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
@@ -372,43 +395,43 @@ function SearchResults() {
                         )}
                       </div>
 
-                      {/* Action Buttons */}
-                      <div className="flex items-center gap-2 mt-3 flex-wrap">
-                        {result.maps_url && (
+                      {/* Action Buttons — all real <a> tags, no overlays, Safari-safe */}
+                      <nav className="flex items-center gap-2 mt-3 flex-wrap relative z-10" aria-label="Business actions">
+                        {result.maps_url ? (
                           <a
-                            href={result.maps_url}
+                            href={buildDirectionsUrl(result)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold hover:bg-cyan-500/20 transition-all"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-cyan-500/20 transition-colors"
                           >
-                            <Navigation className="h-3 w-3" />
-                            Directions
+                            <Navigation className="h-3 w-3 pointer-events-none" />
+                            <span className="pointer-events-none">Directions</span>
                           </a>
-                        )}
-                        {result.phone && (
+                        ) : null}
+                        {result.phone ? (
                           <a
                             href={`tel:${result.phone.replace(/[^+\d]/g, "")}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold hover:bg-emerald-500/20 transition-all"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-emerald-500/20 transition-colors"
                           >
-                            <Phone className="h-3 w-3" />
-                            {result.phone}
+                            <Phone className="h-3 w-3 pointer-events-none" />
+                            <span className="pointer-events-none">{result.phone}</span>
                           </a>
-                        )}
-                        {result.website && (
+                        ) : null}
+                        {result.website ? (
                           <a
-                            href={result.website}
+                            href={ensureProtocol(result.website)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-secondary border border-border text-foreground text-xs font-semibold hover:border-cyan-500/20 transition-all"
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-secondary border border-border text-foreground text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:border-cyan-500/20 transition-colors"
                           >
-                            <Globe className="h-3 w-3" />
-                            Website
+                            <Globe className="h-3 w-3 pointer-events-none" />
+                            <span className="pointer-events-none">Website</span>
                           </a>
-                        )}
-                      </div>
+                        ) : null}
+                      </nav>
                     </div>
                   </div>
-                </div>
+                </article>
               ))}
             </div>
           )}
