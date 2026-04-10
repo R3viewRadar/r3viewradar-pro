@@ -7,6 +7,13 @@ import type { LatLng } from "@/lib/geo";
  * No mock data. No fallbacks. Real businesses only.
  */
 
+interface PlaceReview {
+  authorAttribution?: { displayName?: string };
+  rating?: number;
+  text?: { text?: string };
+  relativePublishTimeDescription?: string;
+}
+
 interface PlacesResult {
   id: string;
   displayName?: { text: string };
@@ -21,6 +28,15 @@ interface PlacesResult {
   types?: string[];
   location?: { latitude: number; longitude: number };
   primaryTypeDisplayName?: { text: string };
+  reviews?: PlaceReview[];
+  editorialSummary?: { text?: string };
+}
+
+interface ReviewSnippet {
+  author: string;
+  rating: number;
+  text: string;
+  time_ago: string;
 }
 
 interface SearchResultItem {
@@ -41,6 +57,8 @@ interface SearchResultItem {
   lat: number;
   lng: number;
   types: string[];
+  review_summary: string;
+  top_reviews: ReviewSnippet[];
 }
 
 const CATEGORY_QUERIES: Record<string, string> = {
@@ -172,7 +190,7 @@ async function searchGooglePlaces(
       "Content-Type": "application/json",
       "X-Goog-Api-Key": apiKey,
       "X-Goog-FieldMask":
-        "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.currentOpeningHours,places.types,places.location,places.primaryTypeDisplayName",
+        "places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri,places.currentOpeningHours,places.types,places.location,places.primaryTypeDisplayName,places.reviews,places.editorialSummary",
     },
     body: JSON.stringify(requestBody),
   });
@@ -215,8 +233,46 @@ async function searchGooglePlaces(
       lat: placeLat,
       lng: placeLng,
       types: p.types ?? [],
+      review_summary: buildReviewSummary(p),
+      top_reviews: (p.reviews ?? []).slice(0, 3).map((r) => ({
+        author: r.authorAttribution?.displayName ?? "Anonymous",
+        rating: r.rating ?? 0,
+        text: (r.text?.text ?? "").slice(0, 200),
+        time_ago: r.relativePublishTimeDescription ?? "",
+      })),
     };
   });
+}
+
+function buildReviewSummary(place: PlacesResult): string {
+  // Use editorial summary if available
+  if (place.editorialSummary?.text) return place.editorialSummary.text;
+
+  // Otherwise generate from reviews
+  const reviews = place.reviews ?? [];
+  const rating = place.rating ?? 0;
+  const count = place.userRatingCount ?? 0;
+  const name = place.displayName?.text ?? "This business";
+
+  if (reviews.length === 0 && count === 0) return "";
+
+  const positiveCount = reviews.filter((r) => (r.rating ?? 0) >= 4).length;
+  const pct = reviews.length > 0 ? Math.round((positiveCount / reviews.length) * 100) : 0;
+
+  // Pull a highlight snippet from the best review
+  const bestReview = reviews.find((r) => (r.rating ?? 0) >= 4 && (r.text?.text?.length ?? 0) > 30);
+  const snippet = bestReview?.text?.text?.slice(0, 120)?.replace(/\n/g, " ") ?? "";
+
+  if (rating >= 4.5 && count >= 50) {
+    return `Highly rated with ${rating}★ across ${count.toLocaleString()} reviews. ${pct > 0 ? `${pct}% of reviewers rate 4+ stars.` : ""} ${snippet ? `"${snippet}..."` : ""}`.trim();
+  }
+  if (rating >= 4.0) {
+    return `Rated ${rating}★ from ${count.toLocaleString()} reviews. ${snippet ? `"${snippet}..."` : ""}`.trim();
+  }
+  if (count > 0) {
+    return `${count.toLocaleString()} reviews with an average of ${rating}★. ${snippet ? `"${snippet}..."` : ""}`.trim();
+  }
+  return "";
 }
 
 function formatTypes(types?: string[]): string {

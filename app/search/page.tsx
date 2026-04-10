@@ -5,9 +5,16 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   SlidersHorizontal, Star, MapPin, Phone, Globe,
-  Navigation, Clock, Loader2, AlertCircle
+  Navigation, Clock, Loader2, AlertCircle, MessageSquare, ChevronRight, Quote
 } from "lucide-react";
 import SearchBar from "@/components/shared/SearchBar";
+
+interface ReviewSnippet {
+  author: string;
+  rating: number;
+  text: string;
+  time_ago: string;
+}
 
 interface SearchResult {
   id: string;
@@ -25,6 +32,8 @@ interface SearchResult {
   is_open: boolean | null;
   lat: number;
   lng: number;
+  review_summary: string;
+  top_reviews: ReviewSnippet[];
 }
 
 interface SearchResponse {
@@ -319,118 +328,151 @@ function SearchResults() {
               {results.map((result, idx) => (
                 <article
                   key={result.id}
-                  className="rounded-2xl border border-border bg-card p-5 hover:border-cyan-500/20 hover:shadow-lg hover:shadow-cyan-500/5 transition-[border-color,box-shadow] duration-200"
+                  className="rounded-2xl border border-border bg-card overflow-hidden hover:border-cyan-500/20 hover:shadow-lg hover:shadow-cyan-500/5 transition-[border-color,box-shadow] duration-200"
                 >
-                  <div className="flex items-start gap-4">
-                    {/* Rank */}
-                    <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">
-                      {idx + 1}
-                    </div>
+                  {/* Clickable card header — links to business detail */}
+                  <Link
+                    href={`/biz/${encodeURIComponent(result.id)}?name=${encodeURIComponent(result.name)}&lat=${result.lat}&lng=${result.lng}`}
+                    className="block p-5 pb-3 [-webkit-tap-highlight-color:transparent] active:bg-white/[0.02]"
+                  >
+                    <div className="flex items-start gap-4">
+                      {/* Rank */}
+                      <div className="w-8 h-8 rounded-lg bg-secondary flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">
+                        {idx + 1}
+                      </div>
 
-                    {/* Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <h3 className="font-semibold text-foreground truncate">
-                            {result.name}
-                          </h3>
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
-                            {result.category && (
-                              <span className="text-xs text-muted-foreground">
-                                {result.category}
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="font-semibold text-foreground truncate">
+                              {result.name}
+                              <ChevronRight className="inline h-3.5 w-3.5 text-cyan-400 ml-1" />
+                            </h3>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+                              {result.category && (
+                                <span className="text-xs text-muted-foreground">
+                                  {result.category}
+                                </span>
+                              )}
+                              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <MapPin className="h-3 w-3 shrink-0" />
+                                {result.address}
                               </span>
-                            )}
-                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                              <MapPin className="h-3 w-3 shrink-0" />
-                              {result.address}
-                            </span>
+                            </div>
                           </div>
+
+                          {/* Distance */}
+                          {result.distance_label && (
+                            <span className="text-xs font-semibold text-muted-foreground bg-secondary px-2.5 py-1 rounded-md shrink-0">
+                              {result.distance_label}
+                            </span>
+                          )}
                         </div>
 
-                        {/* Distance */}
-                        {result.distance_label && (
-                          <span className="text-xs font-semibold text-muted-foreground bg-secondary px-2.5 py-1 rounded-md shrink-0">
-                            {result.distance_label}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Rating + Hours */}
-                      <div className="flex items-center gap-4 mt-2">
-                        {result.rating > 0 && (
-                          <div className="flex items-center gap-1.5">
-                            <div className="flex items-center gap-0.5">
-                              {Array.from({ length: 5 }).map((_, i) => (
-                                <Star
-                                  key={i}
-                                  className={`h-3.5 w-3.5 ${
-                                    i < Math.round(result.rating)
-                                      ? "fill-amber-400 text-amber-400"
-                                      : "fill-muted text-muted"
-                                  }`}
-                                />
-                              ))}
+                        {/* Rating + Hours */}
+                        <div className="flex items-center gap-4 mt-2">
+                          {result.rating > 0 && (
+                            <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-0.5">
+                                {Array.from({ length: 5 }).map((_, i) => (
+                                  <Star
+                                    key={i}
+                                    className={`h-3.5 w-3.5 ${
+                                      i < Math.round(result.rating)
+                                        ? "fill-amber-400 text-amber-400"
+                                        : "fill-muted text-muted"
+                                    }`}
+                                  />
+                                ))}
+                              </div>
+                              <span className="text-sm font-semibold text-foreground">
+                                {result.rating.toFixed(1)}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                ({result.review_count.toLocaleString()} reviews)
+                              </span>
                             </div>
-                            <span className="text-sm font-semibold text-foreground">
-                              {result.rating.toFixed(1)}
+                          )}
+                          {result.hours_status && (
+                            <span
+                              className={`flex items-center gap-1 text-xs ${
+                                result.is_open
+                                  ? "text-emerald-400"
+                                  : result.is_open === false
+                                  ? "text-red-400"
+                                  : "text-muted-foreground"
+                              }`}
+                            >
+                              <Clock className="h-3 w-3" />
+                              {result.hours_status}
                             </span>
-                            <span className="text-xs text-muted-foreground">
-                              ({result.review_count.toLocaleString()})
-                            </span>
+                          )}
+                        </div>
+
+                        {/* Review Summary */}
+                        {result.review_summary && (
+                          <div className="mt-3 rounded-lg bg-secondary/50 border border-border/50 px-3 py-2">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <MessageSquare className="h-3 w-3 text-cyan-400" />
+                              <span className="text-[10px] font-semibold text-cyan-400 uppercase tracking-wider">Review Summary</span>
+                            </div>
+                            <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
+                              {result.review_summary}
+                            </p>
                           </div>
                         )}
-                        {result.hours_status && (
-                          <span
-                            className={`flex items-center gap-1 text-xs ${
-                              result.is_open
-                                ? "text-emerald-400"
-                                : result.is_open === false
-                                ? "text-red-400"
-                                : "text-muted-foreground"
-                            }`}
-                          >
-                            <Clock className="h-3 w-3" />
-                            {result.hours_status}
-                          </span>
+
+                        {/* Top Review Quote */}
+                        {result.top_reviews?.[0]?.text && (
+                          <div className="mt-2 flex items-start gap-2">
+                            <Quote className="h-3 w-3 text-muted-foreground/40 shrink-0 mt-0.5" />
+                            <p className="text-xs text-muted-foreground/70 italic line-clamp-1">
+                              &ldquo;{result.top_reviews[0].text}&rdquo;
+                              <span className="not-italic text-muted-foreground/40 ml-1">
+                                — {result.top_reviews[0].author}
+                              </span>
+                            </p>
+                          </div>
                         )}
                       </div>
-
-                      {/* Action Buttons — all real <a> tags, no overlays, Safari-safe */}
-                      <nav className="flex items-center gap-2 mt-3 flex-wrap relative z-10" aria-label="Business actions">
-                        {result.maps_url ? (
-                          <a
-                            href={buildDirectionsUrl(result)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-cyan-500/20 transition-colors"
-                          >
-                            <Navigation className="h-3 w-3 pointer-events-none" />
-                            <span className="pointer-events-none">Directions</span>
-                          </a>
-                        ) : null}
-                        {result.phone ? (
-                          <a
-                            href={`tel:${result.phone.replace(/[^+\d]/g, "")}`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-emerald-500/20 transition-colors"
-                          >
-                            <Phone className="h-3 w-3 pointer-events-none" />
-                            <span className="pointer-events-none">{result.phone}</span>
-                          </a>
-                        ) : null}
-                        {result.website ? (
-                          <a
-                            href={ensureProtocol(result.website)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-secondary border border-border text-foreground text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:border-cyan-500/20 transition-colors"
-                          >
-                            <Globe className="h-3 w-3 pointer-events-none" />
-                            <span className="pointer-events-none">Website</span>
-                          </a>
-                        ) : null}
-                      </nav>
                     </div>
-                  </div>
+                  </Link>
+
+                  {/* Action Buttons — outside the clickable area, Safari-safe */}
+                  <nav className="flex items-center gap-2 px-5 pb-4 pt-1 flex-wrap relative z-10" aria-label="Business actions">
+                    {result.maps_url ? (
+                      <a
+                        href={buildDirectionsUrl(result)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-cyan-500/20 transition-colors"
+                      >
+                        <Navigation className="h-3 w-3 pointer-events-none" />
+                        <span className="pointer-events-none">Directions</span>
+                      </a>
+                    ) : null}
+                    {result.phone ? (
+                      <a
+                        href={`tel:${result.phone.replace(/[^+\d]/g, "")}`}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:bg-emerald-500/20 transition-colors"
+                      >
+                        <Phone className="h-3 w-3 pointer-events-none" />
+                        <span className="pointer-events-none">{result.phone}</span>
+                      </a>
+                    ) : null}
+                    {result.website ? (
+                      <a
+                        href={ensureProtocol(result.website)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-secondary border border-border text-foreground text-xs font-semibold select-none [-webkit-tap-highlight-color:transparent] active:opacity-70 hover:border-cyan-500/20 transition-colors"
+                      >
+                        <Globe className="h-3 w-3 pointer-events-none" />
+                        <span className="pointer-events-none">Website</span>
+                      </a>
+                    ) : null}
+                  </nav>
                 </article>
               ))}
             </div>
