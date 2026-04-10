@@ -1,26 +1,12 @@
+"use client";
+
+import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
-import type { Metadata } from "next";
 import { SlidersHorizontal } from "lucide-react";
 import SearchBar from "@/components/shared/SearchBar";
 import ProfileCard from "@/components/shared/ProfileCard";
-import { searchProfiles } from "@/lib/mock-data";
+import { searchProfiles, MOCK_PROFILES } from "@/lib/mock-data";
 import type { Category } from "@/types";
-
-export const metadata: Metadata = {
-  title: "Search Professionals",
-  description: "Find trusted lawyers, insurance agents, financial advisors, and real estate professionals near you.",
-};
-
-interface SearchPageProps {
-  searchParams: {
-    q?: string;
-    category?: string;
-    location?: string;
-    sort?: string;
-    min_rating?: string;
-    verified?: string;
-  };
-}
 
 const SORT_OPTIONS = [
   { value: "relevance", label: "Most Relevant" },
@@ -43,13 +29,25 @@ const CATEGORIES = [
   { value: "real-estate", label: "🏠 Real Estate" },
 ];
 
-export default function SearchPage({ searchParams }: SearchPageProps) {
-  const query = searchParams.q ?? "";
-  const category = searchParams.category as Category | undefined;
-  const location = searchParams.location ?? "";
-  const minRating = parseFloat(searchParams.min_rating ?? "0");
+function SearchResults() {
+  const searchParams = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const category = (searchParams.get("category") ?? "") as Category | "";
+  const location = searchParams.get("location") ?? "";
+  const minRatingStr = searchParams.get("min_rating") ?? "0";
+  const minRating = parseFloat(minRatingStr);
+  const verifiedOnly = searchParams.get("verified") === "true";
+  const sortBy = searchParams.get("sort") ?? "relevance";
 
-  let results = searchProfiles(query, category, location);
+  // Search with or without filters
+  let results = category
+    ? searchProfiles(query, category as Category, location)
+    : searchProfiles(query, undefined, location);
+
+  // If no query and no category, show all profiles
+  if (!query && !category) {
+    results = [...MOCK_PROFILES];
+  }
 
   // Apply rating filter
   if (minRating > 0) {
@@ -57,17 +55,30 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
   }
 
   // Apply verified filter
-  if (searchParams.verified === "true") {
+  if (verifiedOnly) {
     results = results.filter((p) => p.verified);
   }
 
   // Sort
-  if (searchParams.sort === "trust_score") {
+  if (sortBy === "trust_score") {
     results.sort((a, b) => b.trust_score - a.trust_score);
-  } else if (searchParams.sort === "rating") {
+  } else if (sortBy === "rating") {
     results.sort((a, b) => b.overall_rating - a.overall_rating);
-  } else if (searchParams.sort === "review_count") {
+  } else if (sortBy === "review_count") {
     results.sort((a, b) => b.review_count - a.review_count);
+  }
+
+  function buildFilterUrl(params: Record<string, string>): string {
+    const base: Record<string, string> = {};
+    if (query) base.q = query;
+    if (category) base.category = category;
+    if (location) base.location = location;
+    const merged = { ...base, ...params };
+    // Remove empty values
+    Object.keys(merged).forEach((k) => {
+      if (!merged[k]) delete merged[k];
+    });
+    return `/search?${new URLSearchParams(merged).toString()}`;
   }
 
   return (
@@ -76,7 +87,7 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
       <div className="mb-8">
         <SearchBar
           initialQuery={query}
-          initialCategory={category ?? ""}
+          initialCategory={category}
           initialLocation={location}
         />
       </div>
@@ -99,9 +110,9 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
                 {CATEGORIES.map((cat) => (
                   <a
                     key={cat.value}
-                    href={`/search?${new URLSearchParams({ ...(query && { q: query }), ...(cat.value && { category: cat.value }), ...(location && { location }) }).toString()}`}
+                    href={buildFilterUrl({ category: cat.value })}
                     className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
-                      (category ?? "") === cat.value
+                      category === cat.value
                         ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                     }`}
@@ -121,9 +132,9 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
                 {RATING_FILTERS.map((r) => (
                   <a
                     key={r.value}
-                    href={`/search?${new URLSearchParams({ ...(query && { q: query }), ...(category && { category }), ...(location && { location }), min_rating: r.value }).toString()}`}
+                    href={buildFilterUrl({ min_rating: minRatingStr === r.value ? "" : r.value })}
                     className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
-                      searchParams.min_rating === r.value
+                      minRatingStr === r.value
                         ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                     }`}
@@ -137,15 +148,21 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
             {/* Verified only */}
             <div>
               <a
-                href={`/search?${new URLSearchParams({ ...(query && { q: query }), ...(category && { category }), ...(location && { location }), verified: searchParams.verified === "true" ? "false" : "true" }).toString()}`}
+                href={buildFilterUrl({ verified: verifiedOnly ? "" : "true" })}
                 className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  searchParams.verified === "true"
+                  verifiedOnly
                     ? "bg-cyan-500/10 text-cyan-400 border border-cyan-500/20"
                     : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                 }`}
               >
-                <div className={`h-4 w-4 rounded border ${searchParams.verified === "true" ? "bg-cyan-500 border-cyan-500" : "border-border"} flex items-center justify-center`}>
-                  {searchParams.verified === "true" && <span className="text-black text-[10px] font-bold">✓</span>}
+                <div
+                  className={`h-4 w-4 rounded border ${
+                    verifiedOnly ? "bg-cyan-500 border-cyan-500" : "border-border"
+                  } flex items-center justify-center`}
+                >
+                  {verifiedOnly && (
+                    <span className="text-black text-[10px] font-bold">✓</span>
+                  )}
                 </div>
                 Verified Only
               </a>
@@ -166,11 +183,11 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
 
             {/* Sort */}
             <select
-              defaultValue={searchParams.sort ?? "relevance"}
-              className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+              value={sortBy}
               onChange={(e) => {
-                // Client-side sort would go here in a real app
+                window.location.href = buildFilterUrl({ sort: e.target.value });
               }}
+              className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -205,5 +222,26 @@ export default function SearchPage({ searchParams }: SearchPageProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="container py-8">
+          <div className="animate-pulse space-y-6">
+            <div className="h-12 bg-secondary rounded-xl" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="h-48 bg-card border border-border rounded-2xl" />
+              ))}
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <SearchResults />
+    </Suspense>
   );
 }
